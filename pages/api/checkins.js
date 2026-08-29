@@ -99,6 +99,13 @@ export default async function handler(req, res) {
         const state = (data && (typeof data.value === 'string' ? JSON.parse(data.value) : data.value)) || { checkins: [] };
         state.checkins = state.checkins || [];
         state.checkins.unshift(rec);
+        // mark this device closed for attendee checkins (only if arrived via QR scan)
+        state.closedDevices = state.closedDevices || [];
+        try {
+          if (rec.type === 'attendee' && rec.scanned && rec.deviceId) {
+            if (!state.closedDevices.includes(rec.deviceId)) state.closedDevices.unshift(rec.deviceId);
+          }
+        } catch (e) {}
         // cap history to reasonable size
         if (state.checkins.length > 2000) state.checkins = state.checkins.slice(0, 2000);
         const { error } = await supabase.from('app_state').upsert({ key: 'converge', value: JSON.stringify(state) }, { onConflict: 'key' });
@@ -114,6 +121,13 @@ export default async function handler(req, res) {
       const state = readState();
       state.checkins = state.checkins || [];
       state.checkins.unshift(rec);
+      // mark closed device for attendee (only if arrived via QR scan)
+      state.closedDevices = state.closedDevices || [];
+      try {
+        if (rec.type === 'attendee' && rec.scanned && rec.deviceId) {
+          if (!state.closedDevices.includes(rec.deviceId)) state.closedDevices.unshift(rec.deviceId);
+        }
+      } catch (e) {}
       if (state.checkins.length > 2000) state.checkins = state.checkins.slice(0, 2000);
       writeState(state);
       return res.status(200).json({ ok: true, checkins: state.checkins, created: rec });

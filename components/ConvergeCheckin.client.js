@@ -31,8 +31,40 @@ export default function ConvergeCheckin() {
   const [form, setForm] = useState({ name: "", type: "attendee", position: "", company: "" });
   const [result, setResult] = useState(null);
 
+  // device identity and scan state
+  const [deviceId, setDeviceId] = useState(null);
+  const [scanned, setScanned] = useState(false);
+
   // load persisted state on mount
   useEffect(() => {
+    let isScanned = false;
+    if (typeof window !== 'undefined') {
+      // ensure persistent device id
+      let id = localStorage.getItem('kioskDeviceId');
+      if (!id) {
+        id = `kiosk-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+        try { localStorage.setItem('kioskDeviceId', id); } catch (e) {}
+      }
+      setDeviceId(id);
+
+      // detect QR scanner landing via ?scan=1 param
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('scan') === '1' || params.get('scan') === 'true') {
+          isScanned = true;
+          setScanned(true);
+          // ensure kiosk view (attendee) and show only the check-in form
+          setView('kiosk');
+          setTimeout(() => setModalOpen(true), 300);
+          // remove query param from history to avoid repeated opens
+          const u = new URL(window.location.href);
+          u.searchParams.delete('scan');
+          window.history.replaceState({}, document.title, u.toString());
+        }
+      } catch (e) {}
+    }
+
+    // fetch persisted app state and enforce closed-device behavior
     fetch('/api/state')
       .then((r) => r.json())
       .then((data) => {
@@ -40,9 +72,32 @@ export default function ConvergeCheckin() {
           setEmployers(data.employers || []);
           setRegistered(data.registered || { attendee: 0, jobseeker: 0 });
           setCheckins(data.checkins || []);
+          // if device is marked closed and this visit is not a scan, redirect to closed page
+          try {
+            const closed = (data.closedDevices || []);
+            const id = localStorage.getItem('kioskDeviceId');
+            if (id && closed.includes(id) && !isScanned) {
+              window.location.href = '/kiosk-closed';
+            }
+          } catch (e) {}
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        // ignore, start with local state
+      });
+
+    // Generate QR code pointing to the check-in form on this site.
+    try {
+      const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+      const url = `${origin}/?scan=1`;
+      import('qrcode').then((QRCode) => {
+        QRCode.toDataURL(url, { margin: 1, width: 320 })
+          .then((d) => setQrDataUrl(d))
+          .catch(() => setQrDataUrl(null));
+      }).catch(() => setQrDataUrl(null));
+    } catch (e) {
+      setQrDataUrl(null);
+    }
   }, []);
 
   const openingsList = useMemo(() => {
@@ -197,6 +252,8 @@ export default function ConvergeCheckin() {
       company: form.company.trim(),
       matchedEmployer: null,
       matchedPosition: null,
+      deviceId: deviceId || null,
+      scanned: !!scanned,
     };
     if (form.type === "jobseeker") {
       const match = findMatch(form.position);
@@ -210,10 +267,34 @@ export default function ConvergeCheckin() {
     setResult(record);
     setStep("success");
 
+    // Attempt to persist and then close the kiosk (or fallback to a closed page)
     try {
-      await fetch('/api/checkins', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(record) });
+      const resp = await fetch('/api/checkins', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(record) });
+      // if write succeeded (or even if it failed), close the kiosk UI to prevent further input
+      closeKioskFallback();
+      return resp;
     } catch (e) {
+      // network errors: still close the kiosk UI so device can't make more checkins
+      closeKioskFallback();
+      return null;
+    }
+  }
+
+  function closeKioskFallback() {
+    // Best-effort: try to close the window (works when opened via script or in some kiosk wrappers)
+    try {
+      // attempt immediate close
+      window.open('', '_self');
+      window.close();
+    } catch (err) {
       // ignore
+    }
+    // Fallback: navigate to a simple static closed page that disables UI
+    try {
+      window.location.href = '/kiosk-closed';
+    } catch (e) {
+      // last resort: hide the body
+      try { document.body.innerHTML = '<h1>Thank you — kiosk closed</h1>'; } catch (e) {}
     }
   }
 
