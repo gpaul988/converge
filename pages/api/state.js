@@ -1,114 +1,100 @@
-import fs from 'fs';
-import path from 'path';
-import { createClient } from '@supabase/supabase-js';
-
-// If deployed on Netlify as serverless functions, the filesystem is ephemeral.
-// Detect Netlify and refuse writes unless explicitly enabled via ALLOW_FILE_PERSIST.
-const IS_NETLIFY = process.env.NETLIFY === 'true';
-const ALLOW_FILE_PERSIST = process.env.ALLOW_FILE_PERSIST === 'true';
-
-const DATA_PATH = path.join(process.cwd(), 'data', 'state.json');
-
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_KEY = process.env.SUPABASE_KEY || '';
-const USE_SUPABASE = !!(SUPABASE_URL && SUPABASE_KEY);
-let supabase = null;
-if (USE_SUPABASE) supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+import { db } from '../../db/index.js';
+import { checkins, employers, employerOpenings, registrationCounts } from '../../db/schema.js';
+import { desc } from 'drizzle-orm';
 
 async function readState() {
-  if (USE_SUPABASE) {
-    try {
-      const { data, error } = await supabase.from('app_state').select('value').eq('key', 'converge').single();
-      if (error) {
-        // If table missing or no row, fallback to empty
-        console.warn('Supabase readState warning', error.message || error);
-        return { employers: [], registered: { attendee: 0, jobseeker: 0 }, checkins: [] };
-      }
-      return typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
-    } catch (e) {
-      console.error('Supabase readState error', e);
-      return { employers: [], registered: { attendee: 0, jobseeker: 0 }, checkins: [] };
-    }
-  }
+  const [checkinRows, employerRows, openingRows, registeredRows] = await Promise.all([
+    db.select().from(checkins).orderBy(desc(checkins.id)).limit(2000),
+    db.select().from(employers),
+    db.select().from(employerOpenings),
+    db.select().from(registrationCounts),
+  ]);
 
-  try {
-    const raw = fs.readFileSync(DATA_PATH, 'utf8');
-    return JSON.parse(raw);
-  } catch (e) {
-    return { employers: [], registered: { attendee: 0, jobseeker: 0 }, checkins: [] };
-  }
+  const registered = { attendee: 0, jobseeker: 0 };
+  registeredRows.forEach((r) => { registered[r.kind] = r.count; });
+
+  return {
+    checkins: checkinRows,
+    employers: employerRows.map((e) => ({
+      id: e.id,
+      name: e.name,
+      openings: openingRows.filter((o) => o.employerId === e.id).map((o) => o.position),
+    })),
+    registered,
+  };
 }
 
-async function writeState(state) {
-  if (IS_NETLIFY && !ALLOW_FILE_PERSIST && !USE_SUPABASE) {
-    // don't attempt to write on Netlify by default
-    console.warn('Attempted file write on Netlify; ALLOW_FILE_PERSIST not set.');
-    return false;
-  }
-
-  if (USE_SUPABASE) {
-    try {
-      const payload = { key: 'converge', value: JSON.stringify(state) };
-      const { error } = await supabase.from('app_state').upsert(payload, { onConflict: 'key' });
-      if (error) {
-        console.error('Supabase writeState error', error);
-        return false;
+async function writeState(next) {
+  await db.transaction(async (tx) => {
+    if (Array.isArray(next.employers)) {
+      await tx.delete(employerOpenings);
+      await tx.delete(employers);
+      for (const e of next.employers) {
+        const name = String(e.name || '').trim();
+        if (!name) continue;
+        const [inserted] = await tx.insert(employers).values({ name }).returning();
+        const openings = Array.isArray(e.openings) ? e.openings : [];
+        for (const position of openings) {
+          const pos = String(position || '').trim();
+          if (pos) await tx.insert(employerOpenings).values({ employerId: inserted.id, position: pos });
+        }
       }
-      return true;
-    } catch (e) {
-      console.error('Supabase writeState exception', e);
-      return false;
     }
-  }
 
-  try {
-    fs.writeFileSync(DATA_PATH, JSON.stringify(state, null, 2), 'utf8');
-    return true;
-  } catch (e) {
-    console.error('writeState error', e);
-    return false;
-  }
+    if (next.registered && typeof next.registered === 'object') {
+      for (const kind of ['attendee', 'jobseeker']) {
+        const count = Number(next.registered[kind] || 0);
+        await tx.insert(registrationCounts)
+          .values({ kind, count })
+          .onConflictDoUpdate({ target: registrationCounts.kind, set: { count } });
+      }
+    }
+
+    if (Array.isArray(next.checkins)) {
+      await tx.delete(checkins);
+      for (const c of next.checkins) {
+        if (!c || !c.type) continue;
+        await tx.insert(checkins).values({
+          name: String(c.name || '').trim() || 'Unknown',
+          code: c.code || null,
+          phone: c.phone || null,
+          type: c.type,
+          position: String(c.position || ''),
+          company: String(c.company || ''),
+          matchedEmployer: c.matchedEmployer || null,
+          matchedPosition: c.matchedPosition || null,
+          checkinTime: c.time || null,
+        });
+      }
+    }
+  });
 }
 
 export default async function handler(req, res) {
-  if (IS_NETLIFY && !ALLOW_FILE_PERSIST && !USE_SUPABASE) {
-    // Informative responses to avoid silent failures when deployed serverless
-    if (req.method === 'GET') {
-      return res.status(200).json({ employers: [], registered: { attendee: 0, jobseeker: 0 }, checkins: [], warning: 'Deployed on Netlify: file persistence is disabled. Configure Supabase and set SUPABASE_URL/SUPABASE_KEY, or set ALLOW_FILE_PERSIST=true for ephemeral writes.' });
-    }
-    if (req.method === 'POST') {
-      return res.status(501).json({ ok: false, error: 'Persistence disabled in serverless environment. Configure Supabase or set ALLOW_FILE_PERSIST=true (not recommended for production).' });
+  if (req.method === 'GET') {
+    try {
+      return res.status(200).json(await readState());
+    } catch (e) {
+      console.error(e);
+      return res.status(500).json({ employers: [], registered: { attendee: 0, jobseeker: 0 }, checkins: [] });
     }
   }
 
-  if (req.method === 'GET') {
-    const state = await readState();
-    return res.status(200).json(state);
-  }
   if (req.method === 'POST') {
-    // require admin password for snapshot writes
     const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
     const headerPass = req.headers['x-admin-password'] || '';
     if (ADMIN_PASSWORD && headerPass !== ADMIN_PASSWORD) {
       return res.status(401).json({ ok: false, error: 'Unauthorized' });
     }
     try {
-      const body = req.body;
-      // Body expected to contain employers, registered, checkins
-      const current = await readState();
-      const next = {
-        employers: Array.isArray(body.employers) ? body.employers : current.employers,
-        registered: body.registered || current.registered,
-        checkins: Array.isArray(body.checkins) ? body.checkins : current.checkins,
-      };
-      const ok = await writeState(next);
-      if (!ok) throw new Error('Could not persist state');
+      await writeState(req.body || {});
       return res.status(200).json({ ok: true });
     } catch (e) {
       console.error(e);
       return res.status(500).json({ ok: false, error: 'Could not persist state' });
     }
   }
+
   res.setHeader('Allow', ['GET', 'POST']);
   res.status(405).end('Method Not Allowed');
 }
