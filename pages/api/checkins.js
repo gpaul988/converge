@@ -106,6 +106,24 @@ export default async function handler(req, res) {
             if (!state.closedDevices.includes(rec.deviceId)) state.closedDevices.unshift(rec.deviceId);
           }
         } catch (e) {}
+        // if there's an uploaded attendees list, try to mark matched attendee as checkedIn
+        try {
+          state.attendees = state.attendees || [];
+          const norm = (s='') => String(s||'').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const recNorm = norm(rec.name);
+          const recDigits = String(rec.phone || '').replace(/\D/g, '').slice(-7);
+          const recCode = rec.code ? String(rec.code||'').trim().toLowerCase() : null;
+          let matched = false;
+          for (let i=0;i<state.attendees.length;i++){
+            const a = state.attendees[i];
+            const aNorm = norm(a.name);
+            const aDigits = String(a.phone || '').replace(/\D/g, '').slice(-7);
+            const aCode = a.code ? String(a.code||'').trim().toLowerCase() : null;
+            if (recCode && aCode && recCode === aCode) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; matched=true; break; }
+            if (recDigits && aDigits && recDigits === aDigits) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; matched=true; break; }
+            if (recNorm && aNorm && (recNorm === aNorm || aNorm.includes(recNorm) || recNorm.includes(aNorm))) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; matched=true; break; }
+          }
+        } catch (e) {}
         // cap history to reasonable size
         if (state.checkins.length > 2000) state.checkins = state.checkins.slice(0, 2000);
         const { error } = await supabase.from('app_state').upsert({ key: 'converge', value: JSON.stringify(state) }, { onConflict: 'key' });
@@ -128,6 +146,25 @@ export default async function handler(req, res) {
           if (!state.closedDevices.includes(rec.deviceId)) state.closedDevices.unshift(rec.deviceId);
         }
       } catch (e) {}
+
+      // try to mark uploaded attendee as checkedIn when available
+      try {
+        state.attendees = state.attendees || [];
+        const norm = (s='') => String(s||'').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const recNorm = norm(rec.name);
+        const recDigits = String(rec.phone || '').replace(/\D/g, '').slice(-7);
+        const recCode = rec.code ? String(rec.code||'').trim().toLowerCase() : null;
+        for (let i=0;i<state.attendees.length;i++){
+          const a = state.attendees[i];
+          const aNorm = norm(a.name);
+          const aDigits = String(a.phone || '').replace(/\D/g, '').slice(-7);
+          const aCode = a.code ? String(a.code||'').trim().toLowerCase() : null;
+          if (recCode && aCode && recCode === aCode) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; break; }
+          if (recDigits && aDigits && recDigits === aDigits) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; break; }
+          if (recNorm && aNorm && (recNorm === aNorm || aNorm.includes(recNorm) || recNorm.includes(aNorm))) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; break; }
+        }
+      } catch (e) {}
+
       if (state.checkins.length > 2000) state.checkins = state.checkins.slice(0, 2000);
       writeState(state);
       return res.status(200).json({ ok: true, checkins: state.checkins, created: rec });

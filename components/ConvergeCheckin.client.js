@@ -30,6 +30,7 @@ export default function ConvergeCheckin() {
   const [step, setStep] = useState("form");
   const [form, setForm] = useState({ name: "", type: "attendee", position: "", company: "" });
   const [result, setResult] = useState(null);
+  const [uploadedAttendees, setUploadedAttendees] = useState([]);
 
   // device identity and scan state
   const [deviceId, setDeviceId] = useState(null);
@@ -72,6 +73,7 @@ export default function ConvergeCheckin() {
           setEmployers(data.employers || []);
           setRegistered(data.registered || { attendee: 0, jobseeker: 0 });
           setCheckins(data.checkins || []);
+          setUploadedAttendees(data.attendees || []);
           // if device is marked closed and this visit is not a scan, redirect to closed page
           try {
             const closed = (data.closedDevices || []);
@@ -129,6 +131,22 @@ export default function ConvergeCheckin() {
     // optimistic UI
     setRegistered((prev) => ({ ...prev, [kind]: prev[kind] + names.length }));
     flashFeedback(kind, `Imported ${names.length} ✓`);
+
+    // If attendee list, persist the full list so we can highlight checkins
+    if (kind === 'attendee') {
+      const attendees = names.map((n, idx) => ({ id: `u-${Date.now()}-${idx}`, name: n, phone: null, code: null, checkedIn: false }));
+      setUploadedAttendees(attendees);
+      try {
+        const res = await fetch('/api/attendees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attendees }) });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.attendees) setUploadedAttendees(data.attendees);
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
     try {
       await fetch('/api/registered', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, delta: names.length }) });
     } catch (e) {
@@ -270,11 +288,19 @@ export default function ConvergeCheckin() {
     // Attempt to persist and then close the kiosk (or fallback to a closed page)
     try {
       const resp = await fetch('/api/checkins', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(record) });
-      // if write succeeded (or even if it failed), close the kiosk UI to prevent further input
+      // if write succeeded (or even if it failed), update uploaded attendees UI and close the kiosk UI
+      if (resp && resp.ok) {
+        try {
+          markUploadedAttendee(record);
+        } catch (e) {}
+      } else {
+        try { markUploadedAttendee(record); } catch (e) {}
+      }
       closeKioskFallback();
       return resp;
     } catch (e) {
-      // network errors: still close the kiosk UI so device can't make more checkins
+      // network errors: still update UI and close the kiosk
+      try { markUploadedAttendee(record); } catch (e) {}
       closeKioskFallback();
       return null;
     }
@@ -296,6 +322,28 @@ export default function ConvergeCheckin() {
       // last resort: hide the body
       try { document.body.innerHTML = '<h1>Thank you — kiosk closed</h1>'; } catch (e) {}
     }
+  }
+
+  function markUploadedAttendee(rec) {
+    try {
+      setUploadedAttendees((prev) => {
+        const norm = (s='') => String(s||'').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const recNorm = norm(rec.name);
+        const recDigits = String(rec.phone || '').replace(/\D/g, '').slice(-7);
+        const recCode = rec.code ? String(rec.code||'').trim().toLowerCase() : null;
+        const next = prev.map((a) => ({ ...a }));
+        for (let i=0;i<next.length;i++){
+          const a = next[i];
+          const aNorm = norm(a.name);
+          const aDigits = String(a.phone || '').replace(/\D/g, '').slice(-7);
+          const aCode = a.code ? String(a.code||'').trim().toLowerCase() : null;
+          if (recCode && aCode && recCode === aCode) { next[i].checkedIn = true; next[i].time = rec.time; break; }
+          if (recDigits && aDigits && recDigits === aDigits) { next[i].checkedIn = true; next[i].time = rec.time; break; }
+          if (recNorm && aNorm && (recNorm === aNorm || aNorm.includes(recNorm) || recNorm.includes(aNorm))) { next[i].checkedIn = true; next[i].time = rec.time; break; }
+        }
+        return next;
+      });
+    } catch (e) {}
   }
 
   const canSubmit =
@@ -343,6 +391,33 @@ export default function ConvergeCheckin() {
       <h2>Converge Checkin (client)</h2>
       <p>Control room and kiosk UI runs here. Full UI omitted in this update for brevity.</p>
       <p>Employers: {employers.length} · Registered: {registered.attendee}/{registered.jobseeker} · Checkins: {checkins.length}</p>
+
+      <section style={{marginTop: 16}}>
+        <h3>Uploaded Attendees ({uploadedAttendees.length})</h3>
+        {uploadedAttendees.length === 0 && <p style={{opacity:0.7}}>No uploaded attendee list. Import via paste or Excel upload.</p>}
+        {uploadedAttendees.length > 0 && (
+          <div style={{maxHeight: 300, overflow: 'auto', border: '1px solid #eee'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse'}}>
+              <thead>
+                <tr>
+                  <th style={{textAlign:'left', padding: 8}}>Name</th>
+                  <th style={{textAlign:'left', padding: 8}}>Status</th>
+                  <th style={{textAlign:'left', padding: 8}}>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {uploadedAttendees.map((a) => (
+                  <tr key={a.id} style={{background: a.checkedIn ? '#e6f8e6' : 'transparent'}}>
+                    <td style={{padding:8}}>{a.name}</td>
+                    <td style={{padding:8}}>{a.checkedIn ? 'Checked in' : 'Not checked'}</td>
+                    <td style={{padding:8}}>{a.time || ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
