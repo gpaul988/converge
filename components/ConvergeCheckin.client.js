@@ -123,35 +123,49 @@ export default function ConvergeCheckin() {
     }, 2500);
   }
 
-  async function commitNames(kind, names) {
-    if (names.length === 0) {
-      flashFeedback(kind, "No names found ✕");
+  async function commitUploadedAttendees(attendees) {
+    if (!Array.isArray(attendees) || attendees.length === 0) {
+      flashFeedback('attendee', 'No names found ✕');
       return;
     }
-    // optimistic UI
-    setRegistered((prev) => ({ ...prev, [kind]: prev[kind] + names.length }));
-    flashFeedback(kind, `Imported ${names.length} ✓`);
+    // optimistic: update counts by type
+    const counts = attendees.reduce((acc, a) => {
+      const t = (a.type === 'jobseeker') ? 'jobseeker' : 'attendee';
+      acc[t] = (acc[t] || 0) + 1;
+      return acc;
+    }, {});
+    setRegistered((prev) => ({
+      attendee: prev.attendee + (counts.attendee || 0),
+      jobseeker: prev.jobseeker + (counts.jobseeker || 0),
+    }));
+    flashFeedback('attendee', `Imported ${attendees.length} ✓`);
 
-    // If attendee list, persist the full list so we can highlight checkins
-    if (kind === 'attendee') {
-      const attendees = names.map((n, idx) => ({ id: `u-${Date.now()}-${idx}`, name: n, phone: null, code: null, checkedIn: false }));
-      setUploadedAttendees(attendees);
-      try {
-        const res = await fetch('/api/attendees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attendees }) });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.attendees) setUploadedAttendees(data.attendees);
-        }
-      } catch (e) {
-        // ignore
-      }
-    }
-
+    // persist attendees list
+    const payload = attendees.map((a, idx) => ({ id: a.id || `u-${Date.now()}-${idx}`, name: a.name, phone: a.phone || null, code: a.code || null, type: a.type || 'attendee', checkedIn: !!a.checkedIn }));
+    setUploadedAttendees(payload);
     try {
-      await fetch('/api/registered', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind, delta: names.length }) });
+      const res = await fetch('/api/attendees', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ attendees: payload }) });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.attendees) setUploadedAttendees(data.attendees);
+      }
     } catch (e) {
-      // ignore server failure; UI remains optimistic
+      // ignore
     }
+
+    // update registered counts on server
+    try {
+      if (counts.attendee) await fetch('/api/registered', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'attendee', delta: counts.attendee }) });
+      if (counts.jobseeker) await fetch('/api/registered', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'jobseeker', delta: counts.jobseeker }) });
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  async function commitNames(kind, names) {
+    // backward-compatible: convert simple name list to uploaded attendees of given kind
+    const attendees = names.map((n, idx) => ({ id: `u-${Date.now()}-${idx}`, name: n, phone: null, code: null, type: kind }));
+    return commitUploadedAttendees(attendees);
   }
 
   async function commitEmployerRows(pairs) {
@@ -205,8 +219,17 @@ export default function ConvergeCheckin() {
       });
       commitEmployerRows(pairs);
     } else {
-      const names = text.split("\n").map((l) => l.trim()).filter(Boolean);
-      commitNames(kind, names);
+      // support combined paste format: "Name" or "Name, type"
+      const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+      const attendees = [];
+      lines.forEach((line, idx) => {
+        const parts = line.split(",").map(p => p.trim()).filter(Boolean);
+        const name = parts[0];
+        if (!name) return;
+        const t = (parts[1] && /jobseeker/i.test(parts[1])) ? 'jobseeker' : 'attendee';
+        attendees.push({ id: `u-${Date.now()}-${idx}`, name, phone: null, code: null, type: t });
+      });
+      commitUploadedAttendees(attendees);
     }
     setImportText((prev) => ({ ...prev, [kind]: "" }));
   }
@@ -230,14 +253,19 @@ export default function ConvergeCheckin() {
         });
         await commitEmployerRows(pairs);
       } else {
-        const names = [];
+        // support combined attendee/jobseeker file formats: [name], [type?], [phone?], [code?]
+        const attendees = [];
         rows.forEach((row, i) => {
           const name = String(row[0] ?? "").trim();
           if (!name) return;
           if (i === 0 && /^name$/i.test(name)) return;
-          names.push(name);
+          const maybeType = String(row[1] ?? "").trim();
+          const maybePhone = String(row[2] ?? "").trim();
+          const maybeCode = String(row[3] ?? "").trim();
+          const t = /jobseeker/i.test(maybeType) ? 'jobseeker' : (/attendee/i.test(maybeType) ? 'attendee' : kind);
+          attendees.push({ id: `u-${Date.now()}-${i}`, name, phone: maybePhone || null, code: maybeCode || null, type: t, checkedIn: false });
         });
-        await commitNames(kind, names);
+        await commitUploadedAttendees(attendees);
       }
     } catch (err) {
       flashFeedback(kind, "Couldn't read that file ✕");
@@ -401,6 +429,7 @@ export default function ConvergeCheckin() {
               <thead>
                 <tr>
                   <th style={{textAlign:'left', padding: 8}}>Name</th>
+                  <th style={{textAlign:'left', padding: 8}}>Type</th>
                   <th style={{textAlign:'left', padding: 8}}>Status</th>
                   <th style={{textAlign:'left', padding: 8}}>Time</th>
                 </tr>
@@ -409,9 +438,10 @@ export default function ConvergeCheckin() {
                 {uploadedAttendees.map((a) => (
                   <tr key={a.id} style={{background: a.checkedIn ? '#e6f8e6' : 'transparent'}}>
                     <td style={{padding:8}}>{a.name}</td>
-                    <td style={{padding:8}}>{a.checkedIn ? 'Checked in' : 'Not checked'}</td>
-                    <td style={{padding:8}}>{a.time || ''}</td>
-                  </tr>
+                          <td style={{padding:8}}>{a.type || 'attendee'}</td>
+                          <td style={{padding:8}}>{a.checkedIn ? 'Checked in' : 'Not checked'}</td>
+                          <td style={{padding:8}}>{a.time || ''}</td>
+                        </tr>
                 ))}
               </tbody>
             </table>
