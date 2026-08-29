@@ -1,0 +1,3 @@
+/* Minimal global styles used by the app */
+html,body,#__next{height:100%;}
+body{margin:0;background:#090C11;color:#E7ECF3;font-family:Inter,system-ui, sans-serif;-webkit-font-smoothing:antialiased}
