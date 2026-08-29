@@ -100,6 +100,8 @@ export default async function handler(req, res) {
         employers: Array.isArray(body.employers) ? body.employers : current.employers,
         registered: body.registered || current.registered,
         checkins: Array.isArray(body.checkins) ? body.checkins : current.checkins,
+        attendees: Array.isArray(body.attendees) ? body.attendees : current.attendees,
+        closedDevices: Array.isArray(body.closedDevices) ? body.closedDevices : current.closedDevices,
       };
       const ok = await writeState(next);
       if (!ok) throw new Error('Could not persist state');

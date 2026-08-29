@@ -365,9 +365,9 @@ export default function ConvergeCheckin() {
           const aNorm = norm(a.name);
           const aDigits = String(a.phone || '').replace(/\D/g, '').slice(-7);
           const aCode = a.code ? String(a.code||'').trim().toLowerCase() : null;
-          if (recCode && aCode && recCode === aCode) { next[i].checkedIn = true; next[i].time = rec.time; break; }
-          if (recDigits && aDigits && recDigits === aDigits) { next[i].checkedIn = true; next[i].time = rec.time; break; }
-          if (recNorm && aNorm && (recNorm === aNorm || aNorm.includes(recNorm) || recNorm.includes(aNorm))) { next[i].checkedIn = true; next[i].time = rec.time; break; }
+        if (recCode && aCode && recCode === aCode) { next[i].checkedIn = true; next[i].time = rec.time; next[i].matchedBy = 'code'; break; }
+        if (recDigits && aDigits && recDigits === aDigits) { next[i].checkedIn = true; next[i].time = rec.time; next[i].matchedBy = 'phone'; break; }
+        if (recNorm && aNorm && (recNorm === aNorm || aNorm.includes(recNorm) || recNorm.includes(aNorm))) { next[i].checkedIn = true; next[i].time = rec.time; next[i].matchedBy = 'name'; break; }
         }
         return next;
       });
@@ -375,7 +375,7 @@ export default function ConvergeCheckin() {
   }
 
   const canSubmit =
-    form.name.trim().length > 0 && (form.type !== "jobseeker" || form.position.trim().length > 0);
+    form.name.trim().length > 0 && (form.type !== "jobseeker" || (String(form.position||'').trim().length > 0));
 
   const matches = checkins.filter((c) => c.matchedEmployer);
 
@@ -420,6 +420,33 @@ export default function ConvergeCheckin() {
       <p>Control room and kiosk UI runs here. Full UI omitted in this update for brevity.</p>
       <p>Employers: {employers.length} · Registered: {registered.attendee}/{registered.jobseeker} · Checkins: {checkins.length}</p>
 
+      <section style={{marginTop: 16, padding: 12, border: '1px solid #eee', borderRadius: 6}}>
+        <h3>Quick Check-in</h3>
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          <input placeholder="Name or phone or code" value={form.name} onChange={(e)=>setForm((f)=>({...f,name:e.target.value}))} style={{padding:8,flex:'1 1 260px'}} />
+
+          <select value={form.type} onChange={(e)=>setForm((f)=>({...f,type:e.target.value}))} style={{padding:8}}>
+            <option value="attendee">Attendee</option>
+            <option value="jobseeker">Job Seeker</option>
+            <option value="employer">Employer</option>
+          </select>
+
+          {form.type === 'jobseeker' && (
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              <div>
+                <input list="positions" placeholder="Select or type position" value={form.position} onChange={(e)=>setForm((f)=>({...f,position:e.target.value}))} style={{padding:8}} />
+                <datalist id="positions">
+                        {openingsList.map((o, i) => (<option key={i} value={o} />))}
+                </datalist>
+              </div>
+            </div>
+          )}
+
+          <button onClick={submitCheckin} disabled={!canSubmit} style={{padding:'8px 12px'}}>Check in</button>
+        </div>
+        <p style={{opacity:0.7,marginTop:8}}>If you imported a list, matching will highlight their row when they check in.</p>
+      </section>
+
       <section style={{marginTop: 16}}>
         <h3>Uploaded Attendees ({uploadedAttendees.length})</h3>
         {uploadedAttendees.length === 0 && <p style={{opacity:0.7}}>No uploaded attendee list. Import via paste or Excel upload.</p>}
@@ -428,23 +455,25 @@ export default function ConvergeCheckin() {
             <table style={{width: '100%', borderCollapse: 'collapse'}}>
               <thead>
                 <tr>
-                  <th style={{textAlign:'left', padding: 8}}>Name</th>
-                  <th style={{textAlign:'left', padding: 8}}>Type</th>
-                  <th style={{textAlign:'left', padding: 8}}>Status</th>
-                  <th style={{textAlign:'left', padding: 8}}>Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {uploadedAttendees.map((a) => (
-                  <tr key={a.id} style={{background: a.checkedIn ? '#e6f8e6' : 'transparent'}}>
-                    <td style={{padding:8}}>{a.name}</td>
+                        <th style={{textAlign:'left', padding: 8}}>Name</th>
+                        <th style={{textAlign:'left', padding: 8}}>Type</th>
+                        <th style={{textAlign:'left', padding: 8}}>Status</th>
+                        <th style={{textAlign:'left', padding: 8}}>Matched By</th>
+                        <th style={{textAlign:'left', padding: 8}}>Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {uploadedAttendees.map((a, idx) => (
+                        <tr key={a.id || idx} style={{background: a.checkedIn ? '#e6f8e6' : 'transparent'}}>
+                          <td style={{padding:8}}>{a.name}</td>
                           <td style={{padding:8}}>{a.type || 'attendee'}</td>
                           <td style={{padding:8}}>{a.checkedIn ? 'Checked in' : 'Not checked'}</td>
+                          <td style={{padding:8}}>{a.matchedBy || ''}</td>
                           <td style={{padding:8}}>{a.time || ''}</td>
                         </tr>
-                ))}
-              </tbody>
-            </table>
+                  ))}
+                </tbody>
+              </table>
           </div>
         )}
       </section>

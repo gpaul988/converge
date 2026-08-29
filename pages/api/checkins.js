@@ -119,9 +119,9 @@ export default async function handler(req, res) {
             const aNorm = norm(a.name);
             const aDigits = String(a.phone || '').replace(/\D/g, '').slice(-7);
             const aCode = a.code ? String(a.code||'').trim().toLowerCase() : null;
-            if (recCode && aCode && recCode === aCode) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; matched=true; break; }
-            if (recDigits && aDigits && recDigits === aDigits) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; matched=true; break; }
-            if (recNorm && aNorm && (recNorm === aNorm || aNorm.includes(recNorm) || recNorm.includes(aNorm))) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; matched=true; break; }
+            if (recCode && aCode && recCode === aCode) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; state.attendees[i].matchedBy = 'code'; matched=true; break; }
+            if (recDigits && aDigits && recDigits === aDigits) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; state.attendees[i].matchedBy = 'phone'; matched=true; break; }
+            if (recNorm && aNorm && (recNorm === aNorm || aNorm.includes(recNorm) || recNorm.includes(aNorm))) { state.attendees[i].checkedIn = true; state.attendees[i].time = rec.time; state.attendees[i].matchedBy = 'name'; matched=true; break; }
           }
         } catch (e) {}
         // cap history to reasonable size

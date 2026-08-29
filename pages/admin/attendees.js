@@ -121,18 +121,36 @@ export default function AdminAttendees() {
                 </tr>
               </thead>
               <tbody>
-                {(filteredAttendees()).map((a, idx) => (
-                  <tr key={a.id || idx} style={{background: a.checkedIn ? '#e6f8e6':'transparent'}}>
-                    <td style={{padding:8}}>{a.name}</td>
-                    <td style={{padding:8}}>{a.type || 'attendee'}</td>
-                    <td style={{padding:8}}>{a.phone || ''}</td>
-                    <td style={{padding:8}}>{a.code || ''}</td>
-                    <td style={{padding:8}}>{a.checkedIn? (a.time || 'Yes') : 'No'}</td>
-                    <td style={{padding:8}}>
-                      <button onClick={()=>toggleChecked((state.attendees||[]).indexOf(a))}>{a.checkedIn? 'Unmark':'Mark'}</button>
-                    </td>
-                  </tr>
-                ))}
+                {(filteredAttendees()).map((a, idx) => {
+                  const fullIdx = (state.attendees || []).indexOf(a);
+                  return (
+                    <tr key={a.id || idx} style={{background: a.checkedIn ? '#e6f8e6':'transparent'}}>
+                      <td style={{padding:8}}>
+                        <input value={a.name || ''} onChange={(e)=>{
+                          const next = {...state}; next.attendees = (next.attendees||[]).map(x=>({...x})); next.attendees[fullIdx].name = e.target.value; setState(next);
+                        }} />
+                      </td>
+                      <td style={{padding:8}}>
+                        <select value={a.type || 'attendee'} onChange={(e)=>{
+                          const next = {...state}; next.attendees = (next.attendees||[]).map(x=>({...x})); next.attendees[fullIdx].type = e.target.value; setState(next);
+                        }}>
+                          <option value="attendee">Attendee</option>
+                          <option value="jobseeker">Jobseeker</option>
+                        </select>
+                      </td>
+                      <td style={{padding:8}}>
+                        <input value={a.phone || ''} onChange={(e)=>{ const next = {...state}; next.attendees = (next.attendees||[]).map(x=>({...x})); next.attendees[fullIdx].phone = e.target.value; setState(next); }} />
+                      </td>
+                      <td style={{padding:8}}>
+                        <input value={a.code || ''} onChange={(e)=>{ const next = {...state}; next.attendees = (next.attendees||[]).map(x=>({...x})); next.attendees[fullIdx].code = e.target.value; setState(next); }} />
+                      </td>
+                      <td style={{padding:8}}>{a.checkedIn? (a.time || 'Yes') : 'No'}</td>
+                      <td style={{padding:8}}>
+                        <button onClick={()=>toggleChecked(fullIdx)}>{a.checkedIn? 'Unmark':'Mark'}</button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
